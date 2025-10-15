@@ -23,23 +23,19 @@ pub mod tests;
 /// The driver task is used to send the KeepAlive messages and maintain the session alive.
 #[macro_export]
 macro_rules! open {
-    ($type:ident : ($spawner:expr, $platform:expr), $endpoint:expr) => {{
-        let (mut session, driver) = $crate::api::session::Session::new($platform, $endpoint)
+    ($zconfig:expr, $endpoint:expr) => {{
+        let spawner = $zconfig.spawner.clone();
+        let task = $zconfig.task.clone();
+        let driver_cell = $zconfig.driver.clone();
+
+        let (mut session, driver) = $crate::api::session::Session::new($zconfig, $endpoint)
             .await
             .unwrap();
 
-        static DRIVER: static_cell::StaticCell<$crate::api::session::SessionDriver<$type>> =
-            static_cell::StaticCell::new();
-
-        let driver: &'static $crate::api::session::SessionDriver<$type> = DRIVER.init(driver);
+        let driver = driver_cell.init(driver);
         session.set_driver(driver);
 
-        #[embassy_executor::task]
-        async fn session_task(runner: &'static $crate::api::session::SessionDriver<$type>) {
-            runner.run().await;
-        }
-
-        $spawner.spawn(session_task(driver)).unwrap();
+        spawner.spawn((task)(driver)).unwrap();
 
         Ok::<_, $crate::result::ZError>(session)
     }};
