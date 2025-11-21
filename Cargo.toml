@@ -109,7 +109,7 @@ zenoh-nostd-wasm = { version = "0.1.0", path = "platforms/zenoh-nostd-wasm", opt
 critical-section = { version = "1.2", features = ["std"], optional = true }
 env_logger = { version = "0.10", optional = true}
 
-getrandom = { version = "0.2", features = ["custom"], optional = true }
+getrandom = { version = "0.2.16", features = ["custom"], optional = true }
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"], optional = true }
 esp-hal = { version = "1.0.0", features = ["defmt", "esp32s3", "unstable"], optional = true }
 embassy-net = { version = "0.7.1", features = ["defmt", "dhcpv4", "medium-ethernet", "tcp"], optional = true }
