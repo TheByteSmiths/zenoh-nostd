@@ -1,6 +1,6 @@
 use rand::{Rng, thread_rng};
 
-use crate::{exts::*, fields::*, msgs::*};
+use crate::{exts::*, fields::*, msgs::*, *};
 
 macro_rules! roundtrip {
     ($ty:ty) => {{
@@ -184,34 +184,8 @@ fn net_rand<'a>(w: &mut impl crate::ZStoreable<'a>) -> NetworkMessage<'a> {
     }
 }
 
-fn trans_rand<'a>(w: &mut impl crate::ZStoreable<'a>) -> TransportMessage<'a> {
-    use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
-    let choices = [InitSyn::ID, OpenSyn::ID, Close::ID, KeepAlive::ID];
-
-    match *choices.choose(&mut rng).unwrap() {
-        InitSyn::ID => {
-            if rng.gen_bool(0.5) {
-                TransportMessage::InitSyn(InitSyn::rand(w))
-            } else {
-                TransportMessage::InitAck(InitAck::rand(w))
-            }
-        }
-        OpenSyn::ID => {
-            if rng.gen_bool(0.5) {
-                TransportMessage::OpenSyn(OpenSyn::rand(w))
-            } else {
-                TransportMessage::OpenAck(OpenAck::rand(w))
-            }
-        }
-        Close::ID => TransportMessage::Close(Close::rand(w)),
-        KeepAlive::ID => TransportMessage::KeepAlive(KeepAlive::rand(w)),
-        _ => unreachable!(),
-    }
-}
-
 #[test]
-fn network_stream() {
+fn transport_codec() {
     extern crate std;
     use std::collections::VecDeque;
 
@@ -226,36 +200,21 @@ fn network_stream() {
         msgs
     };
 
-    let mut transport = crate::Transport::new(
-        false,
-        [0u8; MAX_PAYLOAD_SIZE * NUM_ITER],
-        [0u8; MAX_PAYLOAD_SIZE * NUM_ITER],
-        (MAX_PAYLOAD_SIZE * NUM_ITER) as u16,
-        0,
-    );
+    let mut socket = [0u8; MAX_PAYLOAD_SIZE * NUM_ITER];
+    let mut writer = &mut socket[..];
 
-    let mut data = [0u8; MAX_PAYLOAD_SIZE * NUM_ITER];
+    let mut transport = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).codec();
 
-    let slice = transport
-        .tx()
-        .send(core::iter::empty(), messages.clone().into_iter())
-        .next()
-        .expect("Should have at least one batch");
+    for chunk in transport.tx.write(messages.clone().into_iter()) {
+        writer[..chunk.len()].copy_from_slice(chunk);
+        let (_, remain) = writer.split_at_mut(chunk.len());
+        writer = remain;
+    }
 
-    let len = slice.len();
-    data[..len].copy_from_slice(slice);
+    let len = MAX_PAYLOAD_SIZE * NUM_ITER - writer.len();
+    transport.feed(&socket[..len]);
 
-    let (mut rx, _) = transport.update(|d| {
-        d[..len].copy_from_slice(&data[..len]);
-        len
-    });
-
-    let batch = match rx.next() {
-        Some(crate::msgs::MessageIter::Network(msgs)) => msgs,
-        _ => panic!("Expected Network messages"),
-    };
-
-    for msg in batch {
+    for msg in transport.rx.flush(&mut transport.state) {
         let actual = messages.pop_front().unwrap();
         assert_eq!(msg, actual);
     }
@@ -264,104 +223,7 @@ fn network_stream() {
 }
 
 #[test]
-fn transport_stream() {
-    extern crate std;
-    use std::collections::VecDeque;
+fn transport_connect() {}
 
-    let mut rand = [0u8; MAX_PAYLOAD_SIZE * NUM_ITER];
-    let mut rw = rand.as_mut_slice();
-
-    let mut messages = {
-        let mut msgs = VecDeque::new();
-        for _ in 0..thread_rng().gen_range(1..16) {
-            msgs.push_back(trans_rand(&mut rw));
-        }
-        msgs
-    };
-
-    let mut transport = crate::Transport::new(
-        false,
-        [0u8; MAX_PAYLOAD_SIZE * NUM_ITER],
-        [0u8; MAX_PAYLOAD_SIZE * NUM_ITER],
-        (MAX_PAYLOAD_SIZE * NUM_ITER) as u16,
-        0,
-    );
-
-    let mut data = [0u8; MAX_PAYLOAD_SIZE * NUM_ITER];
-
-    let slice = transport
-        .tx()
-        .send(messages.clone().into_iter(), core::iter::empty())
-        .next()
-        .expect("Should have at least one batch");
-
-    let len = slice.len();
-    data[..len].copy_from_slice(slice);
-
-    let (mut rx, _) = transport.update(|d| {
-        d[..len].copy_from_slice(&data[..len]);
-        len
-    });
-
-    let batch = match rx.next() {
-        Some(crate::msgs::MessageIter::Transport(msgs)) => msgs,
-        _ => panic!("Expected Transport messages"),
-    };
-
-    for msg in batch {
-        let actual = messages.pop_front().unwrap();
-        assert_eq!(msg, actual);
-    }
-
-    assert!(messages.is_empty());
-}
-
-// #[test]
-// fn transport_stream() {
-//     extern crate std;
-//     use std::collections::VecDeque;
-
-//     let mut rand = [0u8; MAX_PAYLOAD_SIZE * NUM_ITER];
-//     let mut rw = rand.as_mut_slice();
-
-//     let mut messages = {
-//         let mut msgs = VecDeque::new();
-//         for _ in 1..thread_rng().gen_range(1..16) {
-//             msgs.push_back((Reliability::rand(&mut rw), FrameBody::rand(&mut rw)));
-//         }
-//         msgs
-//     };
-
-//     let mut data = [0u8; MAX_PAYLOAD_SIZE * NUM_ITER];
-//     let mut batch = BatchWriter::new(&mut data[..], 0);
-
-//     for (r, msg) in &messages {
-//         batch.framed(msg, *r, QoS::default()).unwrap();
-//     }
-
-//     batch.unframed(&KeepAlive {}).unwrap();
-
-//     let (_, len) = batch.finalize();
-//     let batch = BatchReader::new(&data[..len]);
-
-//     let mut got_keepalive = false;
-//     for msg in batch {
-//         if let Some((_, actual)) = messages.pop_front() {
-//             if actual.is(&msg) {
-//                 continue;
-//             } else {
-//                 panic!("Frame message did not match");
-//             }
-//         }
-
-//         match msg {
-//             Message::Transport(TransportMessage::KeepAlive(_)) => {
-//                 got_keepalive = true;
-//             }
-//             _ => panic!("First messages should be Frames, and last a KeepAlive"),
-//         }
-//     }
-
-//     assert!(messages.is_empty());
-//     assert!(got_keepalive);
-// }
+#[test]
+fn transport_listen() {}

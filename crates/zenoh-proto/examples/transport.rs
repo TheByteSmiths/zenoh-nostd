@@ -1,50 +1,57 @@
-use std::io::Write;
+use zenoh_proto::{msgs::*, *};
 
-use zenoh_proto::{
-    Transport,
-    exts::QoS,
-    fields::{Reliability, WireExpr},
-    keyexpr,
-    msgs::{MessageIter, NetworkBody, NetworkMessage, Push},
-};
+fn session_process<'a, 'b>(
+    session: &'a (),
+    x: impl Iterator<Item = NetworkMessage<'b>>,
+) -> impl Iterator<Item = NetworkMessage<'a>> {
+    core::iter::from_fn(move || {
+        let _ = (session, &x);
+        None
+    })
+}
 
 fn main() {
-    let mut transport = Transport::new(false, [0u8; 512], [0u8; 512], 512 as u16, 0);
+    let session = ();
 
-    let push = NetworkMessage {
-        qos: QoS::default(),
-        reliability: Reliability::default(),
-        body: NetworkBody::Push(Push {
-            wire_expr: WireExpr::from(keyexpr::from_str_unchecked("ab/cdef")),
-            ..Default::default()
-        }),
-    };
+    // Create a transport using stack-allocated buffers.
+    // Heap-allocated buffers can be used as well.
+    let mut transport = Transport::new([0u8; 512]).batch_size(256).streamed();
 
-    println!("Created NetworkMessage: {:?}", push);
+    // Feed raw bytes into the transport.
+    // Several methods are available:
+    // - `transport.feed(&[u8])` copies data from an existing slice.
+    // - `transport.feed_with(|buf| { ... })` allows filling the internal buffer directly.
+    // - `transport.feed_exact(len, |buf| { ... })` fills exactly `len` bytes.
+    //
+    // **Note** in streamed mode, the `feed_with(|buf| {})` will be called twice: the first one
+    // to retrieve the len of the payload, the last one to retrieve the payload.
+    transport.feed(&[1, 2, 3, 4, 5]);
 
-    let mut data = [0u8; 512];
-    let mut w = &mut data[..];
-    let slice = transport
-        .tx()
-        .send(core::iter::empty(), core::iter::once(push))
-        .next()
-        .expect("Should have at least one chunk");
+    // Flush the RX side of the transport to process received data.
+    // This decodes messages and updates the internal transport state.
+    // It returns an iterator over session-level messages.
+    // No actual processing happens until the iterator is consumed.
+    let network_msgs = transport.rx.flush(&mut transport.state);
 
-    w[..slice.len()].copy_from_slice(slice);
-    w = &mut w[..slice.len()];
+    // Process session messages and produce a response.
+    // As before, processing is lazy: nothing happens until
+    // the returned iterator is consumed.
+    let session_resp = session_process(&session, network_msgs);
 
-    println!("Encoded data {:?}", &w[..]);
+    // Send the response using the TX side of the transport.
+    // This is where data is actually consumed and the transport
+    // (and possibly the session) state is updated.
+    // The iterator yields byte slices ready to be sent over the
+    // network or any other transport medium.
+    for chunk in transport.tx.write(session_resp) {
+        println!("Sent chunk: {:?}", chunk);
+    }
 
-    let (mut rx, _) = transport.update(|d| {
-        d[..w.len()].copy_from_slice(&w[..]);
-        w.len()
-    });
-
-    let mut batch = match rx.next().expect("Should have at least one batch") {
-        MessageIter::Network(msgs) => msgs,
-        _ => panic!("Expected NetworkMessage"),
-    };
-
-    let msg = batch.next().expect("Should have at least one message");
-    println!("Decoded NetworkMessage: {:?}", msg);
+    // Perform auxiliary transport interactions, such as:
+    // - sending keep-alive messages;
+    // - gracefully closing the connection;
+    // - responding to InitSyn / OpenSyn;
+    // - initiating a handshake, etc.
+    let interact = transport.interact();
+    println!("Sent interact: {:?}", interact);
 }

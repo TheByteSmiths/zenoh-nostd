@@ -1,62 +1,209 @@
-use crate::{
-    ZEncode, ZReadable,
-    exts::QoS,
-    fields::Reliability,
-    msgs::{
-        Close, Declare, FrameHeader, InitAck, InitSyn, Interest, InterestFinal, KeepAlive, Message,
-        MessageIter, NetworkBody, NetworkMessage, OpenAck, OpenSyn, Push, Request, Response,
-        ResponseFinal, TransportMessage,
-    },
-};
+use crate::{ZReadable, exts::*, fields::*, msgs::*};
 
-pub struct TransportReceiver<'a> {
-    state: &'a mut TransportState,
-    reader: &'a [u8],
+#[derive(Debug, PartialEq, Default)]
+pub enum TransportState {
+    #[default]
+    /// No state handling:
+    Codec,
+
+    /// States for `listen` mode.
+    WaitingInitSyn,
+    SendingInitAck,
+    WaitingOpenSyn,
+    SendingOpenAck,
+
+    /// States for `connect` mode.
+    SendingInitSyn,
+    WaitingInitAck,
+    SendingOpenSyn,
+    WaitingOpenAck,
+}
+
+impl TransportState {
+    fn handle(&mut self, msg: TransportMessage<'_>) {
+        if matches!(self, Self::Codec) {
+            return;
+        }
+
+        let _ = msg;
+    }
+
+    fn is_sending(&self) -> bool {
+        return matches!(
+            self,
+            TransportState::SendingInitSyn { .. }
+                | TransportState::SendingInitAck { .. }
+                | TransportState::SendingOpenSyn { .. }
+                | TransportState::SendingOpenAck { .. }
+        );
+    }
+
+    fn is_waiting(&self) -> bool {
+        return matches!(
+            self,
+            TransportState::WaitingInitSyn { .. }
+                | TransportState::WaitingInitAck { .. }
+                | TransportState::WaitingOpenSyn { .. }
+                | TransportState::WaitingOpenAck { .. }
+        );
+    }
+}
+
+#[derive(Debug)]
+pub struct TransportRx<Buff> {
+    rx: Buff,
+    cursor: usize,
+
     frame: Option<FrameHeader>,
 }
 
-struct Mark<'a> {
-    ptr: *const u8,
-    len: usize,
-    _lt: core::marker::PhantomData<&'a ()>,
+#[derive(Debug)]
+pub struct TransportTx<Buff> {
+    tx: Buff,
+
+    batch_size: u16,
+    streamed: bool,
+
+    sn: u32,
+    reliability: Option<Reliability>,
+    qos: Option<QoS>,
 }
 
-impl<'a> TransportReceiver<'a> {
-    pub(crate) fn new(state: &'a mut TransportState, reader: &'a [u8]) -> Self {
+#[derive(Debug)]
+pub struct Transport<Buff> {
+    pub tx: TransportTx<Buff>,
+    pub rx: TransportRx<Buff>,
+
+    streamed: bool,
+
+    pub state: TransportState,
+}
+
+impl<Buff> Transport<Buff> {
+    pub fn new(buff: Buff) -> Self
+    where
+        Buff: Clone + AsRef<[u8]>,
+    {
         Self {
-            state,
-            reader,
-            frame: None,
+            tx: TransportTx {
+                tx: buff.clone(),
+                batch_size: buff.as_ref().len().min(u16::MAX as usize) as u16,
+                streamed: false,
+
+                sn: 0,
+                qos: None,
+                reliability: None,
+            },
+            rx: TransportRx {
+                rx: buff,
+                cursor: 0,
+                frame: None,
+            },
+            streamed: false,
+            state: TransportState::Codec,
         }
     }
 
-    fn mark(&self) -> Mark<'a> {
-        Mark {
-            ptr: self.reader.as_ptr(),
-            len: self.reader.len(),
-            _lt: core::marker::PhantomData,
+    pub fn codec(mut self) -> Self {
+        self.state = TransportState::Codec;
+        return self;
+    }
+
+    pub fn batch_size(mut self, batch_size: u16) -> Self {
+        self.tx.batch_size = batch_size;
+        self
+    }
+
+    pub fn streamed(mut self) -> Self {
+        self.tx.streamed = true;
+        self.streamed = true;
+        self
+    }
+
+    pub fn feed(&mut self, data: &[u8])
+    where
+        Buff: AsMut<[u8]>,
+    {
+        if self.state.is_sending() {
+            return;
+        }
+
+        let rx = self.rx.rx.as_mut();
+        let rx = &mut rx[self.rx.cursor..];
+
+        let len = data.len().min(rx.len());
+        rx[..len].copy_from_slice(&data[..len]);
+        self.rx.cursor += len;
+    }
+
+    pub fn feed_exact(&mut self, len: usize, mut data: impl FnMut(&mut [u8]))
+    where
+        Buff: AsMut<[u8]>,
+    {
+        if self.state.is_sending() {
+            return;
+        }
+
+        let rx = self.rx.rx.as_mut();
+        let rx = &mut rx[self.rx.cursor..];
+
+        let len = len.min(rx.len());
+        data(&mut rx[..len]);
+        self.rx.cursor += len;
+    }
+
+    pub fn feed_with(&mut self, mut data: impl FnMut(&mut [u8]) -> usize)
+    where
+        Buff: AsMut<[u8]>,
+    {
+        if self.state.is_sending() {
+            return;
+        }
+
+        let rx = self.rx.rx.as_mut();
+        let rx = &mut rx[self.rx.cursor..];
+
+        if self.streamed {
+            let mut lbuf = [0u8; 2];
+            data(&mut lbuf);
+            let l = u16::from_be_bytes(lbuf) as usize;
+            data(&mut rx[..l]);
+            self.rx.cursor += l;
+        } else {
+            let l = data(&mut rx[..]);
+            self.rx.cursor += l;
         }
     }
 
-    fn rewind(&mut self, mark: Mark<'a>) {
-        unsafe {
-            self.reader = core::slice::from_raw_parts(mark.ptr, mark.len);
+    pub fn interact<'a>(&'a mut self) -> &'a [u8]
+    where
+        Buff: AsMut<[u8]>,
+    {
+        if self.state.is_waiting() {
+            return &[];
         }
-    }
 
-    fn decode(&mut self) -> Option<Message<'a>> {
-        if !self.reader.can_read() {
+        &[]
+    }
+}
+
+impl<Buff> TransportRx<Buff> {
+    fn next<'a>(
+        reader: &mut &'a [u8],
+        state: &mut TransportState,
+        frame: &mut Option<FrameHeader>,
+    ) -> Option<NetworkMessage<'a>> {
+        if !reader.can_read() {
             return None;
         }
 
-        let header = self
-            .reader
+        let header = reader
             .read_u8()
             .expect("reader should not be empty at this stage");
 
         macro_rules! decode {
             ($ty:ty) => {
-                match <$ty as $crate::ZBodyDecode>::z_body_decode(&mut self.reader, header) {
+                match <$ty as $crate::ZBodyDecode>::z_body_decode(reader, header) {
                     Ok(msg) => msg,
                     Err(e) => {
                         crate::error!(
@@ -73,11 +220,11 @@ impl<'a> TransportReceiver<'a> {
         }
 
         let ack = header & 0b0010_0000 != 0;
-        let net = self.frame.is_some();
+        let net = frame.is_some();
         let ifinal = header & 0b0110_0000 == 0;
         let id = header & 0b0001_1111;
 
-        if let Some(tmsg) = match id {
+        if let Some(msg) = match id {
             InitAck::ID if ack => Some(TransportMessage::InitAck(decode!(InitAck))),
             InitSyn::ID => Some(TransportMessage::InitSyn(decode!(InitSyn))),
             OpenAck::ID if ack => Some(TransportMessage::OpenAck(decode!(OpenAck))),
@@ -86,19 +233,21 @@ impl<'a> TransportReceiver<'a> {
             KeepAlive::ID => Some(TransportMessage::KeepAlive(decode!(KeepAlive))),
             _ => None,
         } {
-            return self.state.handle_msg(tmsg).map(Message::Transport);
+            frame.take();
+            state.handle(msg);
+            return Self::next(reader, state, frame);
         }
 
-        let reliability = self.frame.as_ref().map(|f| f.reliability);
-        let qos = self.frame.as_ref().map(|f| f.qos);
+        let reliability = frame.as_ref().map(|f| f.reliability);
+        let qos = frame.as_ref().map(|f| f.qos);
 
         // TODO! negociate `sn` and expect increasing `sn` in frames
 
         let body = match id {
             FrameHeader::ID => {
-                let frame = decode!(FrameHeader);
-                self.frame = Some(frame);
-                return self.decode();
+                let header = decode!(FrameHeader);
+                frame.replace(header);
+                return Self::next(reader, state, frame);
             }
             Push::ID if net => NetworkBody::Push(decode!(Push)),
             Request::ID if net => NetworkBody::Request(decode!(Request)),
@@ -119,79 +268,43 @@ impl<'a> TransportReceiver<'a> {
             }
         };
 
-        Some(Message::Network(NetworkMessage {
+        Some(NetworkMessage {
             reliability: reliability.expect("Should be a frame. Something went wrong."),
             qos: qos.expect("Should be a frame. Something went wrong."),
             body,
-        }))
+        })
     }
 
-    pub fn next(
-        &mut self,
-    ) -> Option<
-        MessageIter<
-            'a,
-            impl Iterator<Item = TransportMessage<'a>>,
-            impl Iterator<Item = NetworkMessage<'a>>,
-        >,
-    > {
-        let message = self.decode()?;
-
-        match message {
-            Message::Transport(message) => Some(MessageIter::Transport(
-                core::iter::once(message).chain(core::iter::from_fn(move || {
-                    let mark = self.mark();
-                    match self.decode()? {
-                        Message::Transport(msg) => Some(msg),
-                        _ => {
-                            self.rewind(mark);
-                            None
-                        }
-                    }
-                })),
-            )),
-            Message::Network(message) => Some(MessageIter::Network(
-                core::iter::once(message).chain(core::iter::from_fn(move || {
-                    let mark = self.mark();
-                    match self.decode()? {
-                        Message::Network(msg) => Some(msg),
-                        _ => {
-                            self.rewind(mark);
-                            None
-                        }
-                    }
-                })),
-            )),
-        }
-    }
-}
-
-pub struct TransportSender<Tx> {
-    streamed: bool,
-
-    tx: Tx,
-    batch_size: u16,
-
-    sn: u32,
-    reliability: Option<Reliability>,
-    qos: Option<QoS>,
-}
-
-impl<Tx> TransportSender<Tx> {
-    pub fn send<'s, 'm>(
-        &'s mut self,
-        transport: impl Iterator<Item = TransportMessage<'m>>,
-        network: impl Iterator<Item = NetworkMessage<'m>>,
-    ) -> impl Iterator<Item = &'s [u8]>
+    pub fn flush<'a>(
+        &'a mut self,
+        state: &mut TransportState,
+    ) -> impl Iterator<Item = NetworkMessage<'a>>
     where
-        Tx: AsMut<[u8]> + 's,
+        Buff: AsRef<[u8]>,
+    {
+        let rx = self.rx.as_ref();
+        let mut reader = &rx[..self.cursor];
+        let frame = &mut self.frame;
+
+        core::iter::from_fn(move || {
+            return Self::next(&mut reader, state, frame);
+        })
+    }
+}
+
+impl<Tx> TransportTx<Tx> {
+    pub fn write<'a, 'b>(
+        &'a mut self,
+        msgs: impl Iterator<Item = NetworkMessage<'b>>,
+    ) -> impl Iterator<Item = &'a [u8]>
+    where
+        Tx: AsMut<[u8]>,
     {
         let streamed = self.streamed;
         let mut buffer = self.tx.as_mut();
         let batch_size = core::cmp::min(self.batch_size as usize, buffer.len());
 
-        let mut transport = transport.peekable();
-        let mut network = network.peekable();
+        let mut msgs = msgs.peekable();
 
         let reliability = &mut self.reliability;
         let qos = &mut self.qos;
@@ -209,34 +322,13 @@ impl<Tx> TransportSender<Tx> {
             let start = writer.len();
 
             let mut length = 0;
-            extern crate std;
-            std::println!("Encoding transport messages...");
-
-            'moop: loop {
-                while let Some(msg) = transport.peek() {
-                    std::println!("Encoding transport message: {:?}", msg);
-
-                    if msg.z_encode(&mut writer).is_ok() {
-                        std::println!("Encoded transport message successfully.");
-                        length = start - writer.len();
-                        transport.next();
-                    } else {
-                        std::println!("Failed to encode transport message, breaking.");
-                        break 'moop;
-                    }
+            while let Some(msg) = msgs.peek() {
+                if msg.z_encode(&mut writer, reliability, qos, sn).is_ok() {
+                    length = start - writer.len();
+                    msgs.next();
+                } else {
+                    break;
                 }
-
-                std::println!("Encoding network messages...");
-                while let Some(msg) = network.peek() {
-                    if msg.z_encode(&mut writer, reliability, qos, sn).is_ok() {
-                        length = start - writer.len();
-                        network.next();
-                    } else {
-                        break;
-                    }
-                }
-
-                break 'moop;
             }
 
             if length == 0 {
@@ -254,84 +346,5 @@ impl<Tx> TransportSender<Tx> {
 
             Some(&ret[..])
         })
-    }
-}
-
-#[derive(Default)]
-pub enum TransportState {
-    #[default]
-    EncodeDecode,
-
-    Uninitialized,
-    Initialized,
-    Opened,
-}
-
-impl TransportState {
-    fn handle_msg<'a>(&mut self, msg: TransportMessage<'a>) -> Option<TransportMessage<'a>> {
-        if matches!(self, TransportState::EncodeDecode) {
-            return Some(msg);
-        }
-
-        None
-    }
-}
-
-pub struct Transport<Tx, Rx> {
-    state: TransportState,
-    streamed: bool,
-
-    rx: Rx,
-    sender: TransportSender<Tx>,
-}
-
-impl<Tx, Rx> Transport<Tx, Rx> {
-    pub fn new(streamed: bool, tx: Tx, rx: Rx, batch_size: u16, sn: u32) -> Self {
-        Self {
-            state: TransportState::EncodeDecode,
-            streamed,
-            rx,
-            sender: TransportSender {
-                streamed,
-                tx,
-                batch_size,
-                sn,
-                reliability: None,
-                qos: None,
-            },
-        }
-    }
-
-    pub fn update(
-        &mut self,
-        mut read: impl FnMut(&mut [u8]) -> usize,
-    ) -> (TransportReceiver<'_>, &mut TransportSender<Tx>)
-    where
-        Rx: AsMut<[u8]>,
-    {
-        let Self {
-            state,
-            streamed,
-            rx,
-            sender,
-        } = self;
-
-        let rx = if *streamed {
-            let mut lbuf = [0u8; 2];
-            read(&mut lbuf);
-            let l = u16::from_be_bytes(lbuf) as usize;
-            read(&mut rx.as_mut()[..l]);
-            &rx.as_mut()[..l]
-        } else {
-            let buf = rx.as_mut();
-            let l = read(buf);
-            &buf[..l]
-        };
-
-        (TransportReceiver::new(state, rx), sender)
-    }
-
-    pub fn tx(&mut self) -> &mut TransportSender<Tx> {
-        &mut self.sender
     }
 }

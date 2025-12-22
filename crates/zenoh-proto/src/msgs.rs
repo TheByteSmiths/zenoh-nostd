@@ -66,30 +66,7 @@ pub enum TransportMessage<'a> {
     OpenAck(OpenAck<'a>),
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum Message<'a> {
-    Transport(TransportMessage<'a>),
-    Network(NetworkMessage<'a>),
-}
-
-pub enum MessageIter<'a, I1, I2>
-where
-    I1: Iterator<Item = TransportMessage<'a>>,
-    I2: Iterator<Item = NetworkMessage<'a>>,
-{
-    Transport(I1),
-    Network(I2),
-}
-
 impl NetworkMessage<'_> {
-    pub fn reliability(&self) -> Reliability {
-        self.reliability
-    }
-
-    pub fn qos(&self) -> QoS {
-        self.qos
-    }
-
     pub fn z_encode(
         &self,
         w: &mut impl ZWriteable,
@@ -97,8 +74,8 @@ impl NetworkMessage<'_> {
         qos: &mut Option<QoS>,
         sn: &mut u32,
     ) -> core::result::Result<(), CodecError> {
-        let r = self.reliability();
-        let q = self.qos();
+        let r = self.reliability;
+        let q = self.qos;
 
         if reliability.as_ref() != Some(&r) || qos.as_ref() != Some(&q) {
             FrameHeader {
