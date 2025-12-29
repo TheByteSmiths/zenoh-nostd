@@ -131,12 +131,22 @@ crate::declare_zerror! {
         #[doc = "TransportIsFull."]
         #[err = "transport is full"]
         TransportIsFull = 55,
+
         #[doc = "Message too large for a batch."]
         #[err = "message too large for a batch"]
         MessageTooLargeForBatch = 56,
-        #[doc = "Tried to make a storage in an incomplete state."]
-        #[err = "tried to make a storage in an incomplete state"]
-        IncompleteState = 57,
+
+        #[doc = "The current transprot state can't handle this message."]
+        #[err = "current state incompatible with message"]
+        StateCantHandle = 57,
+
+        #[doc = "You tried to used a closed transport."]
+        #[err = "transport is closed"]
+        TransportIsClosed = 58,
+
+        #[doc = "Received an invalid attribute in a request."]
+        #[err = "invalid attribute in message"]
+        InvalidAttribute = 59,
     }
 
     // --- Collections related errors ---
@@ -192,6 +202,11 @@ macro_rules! zbail {
     ($err:expr) => {
         return Err($err.into())
     };
+
+    (@log $err:expr) => {{
+        $crate::error!("{}: {}", $err, $crate::zctx!());
+        $crate::zbail!($err)
+    }};
 
     ($err:expr, $($arg:tt)+) => {{
         $crate::error!("{}: {}", $err, $crate::zctx!());

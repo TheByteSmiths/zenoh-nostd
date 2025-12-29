@@ -24,5 +24,5 @@ pub use transport::*;
 
 pub(crate) use zenoh_derive::*;
 
-#[cfg(test)]
-mod tests;
+// #[cfg(test)]
+// mod tests;

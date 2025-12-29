@@ -22,7 +22,7 @@ web_console = ["std", "dep:web-sys"]
 [dependencies]
 zenoh-derive.workspace = true
 uhlc.workspace = true
-borrow.workspace = true
+sha3.workspace = true
 
 log = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
