@@ -39,14 +39,14 @@ pub(crate) enum State {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct TransportState {
+pub struct TransportState {
     zid: ZenohIdProto,
     pub batch_size: u16,
     resolution: Resolution,
     lease: Duration,
     sn: u32,
 
-    pub inner: State,
+    pub(crate) inner: State,
 }
 
 impl Default for TransportState {
@@ -178,7 +178,7 @@ impl TransportState {
         self
     }
 
-    pub fn process<'a>(
+    pub(crate) fn process<'a>(
         &mut self,
         request: Option<StateRequest<'a>>,
     ) -> core::result::Result<Option<StateResponse<'a>>, TransportError> {

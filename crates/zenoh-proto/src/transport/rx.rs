@@ -1,20 +1,17 @@
 use crate::{
     ZReadable,
     msgs::*,
-    transport::{
-        scope::TransportStateScoped,
-        state::{State, StateRequest, TransportState},
-    },
+    transport::state::{State, StateRequest, TransportState},
 };
 
 #[derive(Debug)]
 pub struct TransportRx<Buff> {
-    rx: Buff,
-    cursor: usize,
+    pub(crate) rx: Buff,
+    pub(crate) cursor: usize,
     pub(crate) streamed: bool,
 
-    frame: Option<FrameHeader>,
-    next_expected_sn: u32,
+    pub(crate) frame: Option<FrameHeader>,
+    pub(crate) next_expected_sn: u32,
 }
 
 impl<Buff> TransportRx<Buff> {
@@ -83,7 +80,7 @@ impl<Buff> TransportRx<Buff> {
 
     fn read_one<'a>(
         reader: &mut &'a [u8],
-        state: &mut TransportStateScoped<'a>,
+        state: &mut TransportState,
         last_frame: &mut Option<FrameHeader>,
     ) -> Option<NetworkMessage<'a>> {
         if !reader.can_read() {
@@ -188,7 +185,7 @@ impl<Buff> TransportRx<Buff> {
 
     pub fn flush<'a>(
         &'a mut self,
-        state: &mut TransportStateScoped<'a>,
+        state: &mut TransportState,
     ) -> impl Iterator<Item = NetworkMessage<'a>>
     where
         Buff: AsRef<[u8]>,

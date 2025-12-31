@@ -17,8 +17,9 @@ fn main() {
     let mut transport = Transport::new([0u8; 512]).batch_size(256).streamed();
 
     loop {
-        // Each iteration receives new bytes that must be stored.
-        // Therefore, we need to create a temporary scoped instance of the transport.
+        // Each iteration receives new bytes. Eventually between two states the bytes must be stored,
+        // only if the tx/rx needs to interact, so we need a temporary (scoped) variation of the Transport
+        // capable of retaining this state.
         // (This limitation will likely be addressed in the future.)
         let mut scope = transport.scope();
 

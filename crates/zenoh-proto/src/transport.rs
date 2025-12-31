@@ -8,10 +8,10 @@ mod tx;
 
 #[derive(Debug)]
 pub struct Transport<Buff> {
-    tx: TransportTx<Buff>,
-    rx: TransportRx<Buff>,
+    pub tx: TransportTx<Buff>,
+    pub rx: TransportRx<Buff>,
 
-    state: TransportState,
+    pub state: TransportState,
 }
 
 impl<Buff> Transport<Buff> {

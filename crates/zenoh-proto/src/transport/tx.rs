@@ -1,21 +1,17 @@
 use crate::{
-    ZEncode,
-    exts::QoS,
-    fields::Reliability,
-    msgs::NetworkMessage,
-    transport::{scope::TransportStateScoped, state::TransportState},
+    exts::QoS, fields::Reliability, msgs::NetworkMessage, transport::state::TransportState,
 };
 
 #[derive(Debug)]
 pub struct TransportTx<Buff> {
     pub(crate) streamed: bool,
-    tx: Buff,
+    pub(crate) tx: Buff,
 
-    batch_size: u16,
-    next_sn: u32,
+    pub(crate) batch_size: u16,
+    pub(crate) next_sn: u32,
 
-    last_qos: Option<QoS>,
-    last_reliability: Option<Reliability>,
+    pub(crate) last_qos: Option<QoS>,
+    pub(crate) last_reliability: Option<Reliability>,
 }
 
 impl<Buff> TransportTx<Buff> {
@@ -94,47 +90,5 @@ impl<Buff> TransportTx<Buff> {
 
             Some(&ret[..])
         })
-    }
-
-    pub fn interact<'a>(&mut self, state: &mut TransportStateScoped<'a>) -> Option<&'_ [u8]>
-    where
-        Buff: AsMut<[u8]>,
-    {
-        if let Some(pending) = state.pending.take() {
-            let batch_size = core::cmp::min(self.batch_size as usize, self.tx.as_mut().len());
-            let batch = &mut self.tx.as_mut()[..batch_size];
-
-            if self.streamed && batch_size < 2 {
-                return None;
-            }
-
-            let mut writer = &mut batch[if self.streamed { 2 } else { 0 }..];
-            let start = writer.len();
-
-            let length = if pending.0.z_encode(&mut writer).is_ok() {
-                start - writer.len()
-            } else {
-                crate::error!("Couldn't encode msg {:?}", pending.0);
-                return None;
-            };
-
-            if length == 0 {
-                return None;
-            }
-
-            if self.streamed {
-                let l = (length as u16).to_be_bytes();
-                batch[..2].copy_from_slice(&l);
-            }
-
-            let (ret, _) = self
-                .tx
-                .as_mut()
-                .split_at(length + if self.streamed { 2 } else { 0 });
-
-            Some(&ret[..])
-        } else {
-            None
-        }
     }
 }
