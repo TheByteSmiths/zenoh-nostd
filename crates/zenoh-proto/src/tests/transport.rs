@@ -78,38 +78,15 @@ fn transport_codec() {
     assert!(messages.is_empty());
 }
 
-fn handshake<const N: usize>(t1: &mut Transport<[u8; N]>, t2: &mut Transport<[u8; N]>) {
-    fn step<const N: usize>(transport: &mut Transport<[u8; N]>, socket: (&mut [u8], &mut usize)) {
-        let mut scope = transport.scope();
-
-        scope.rx.feed(&socket.0[..*socket.1]);
-        for _ in scope.rx.flush(&mut scope.state) {}
-
-        if let Some(i) = scope.tx.interact(&mut scope.state) {
-            socket.0[..i.len()].copy_from_slice(i);
-            *socket.1 = i.len();
-        }
-    }
-
-    let mut socket = [0u8; N];
-    let mut length = 0;
-
-    // We may only need 2.5 but we do it 3 times anyway
-    for _ in 0..3 {
-        step(t1, (&mut socket, &mut length));
-        step(t2, (&mut socket, &mut length));
-    }
-}
-
 #[test]
 fn transport_handshake() {
     let mut t1 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).connect();
     let mut t2 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).listen();
-    handshake(&mut t1, &mut t2);
+    const_array_dumb_handshake(&mut t1, &mut t2);
     assert!(t1.opened() && t2.opened());
 
     let mut t1 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).listen();
     let mut t2 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).connect();
-    handshake(&mut t1, &mut t2);
+    const_array_dumb_handshake(&mut t1, &mut t2);
     assert!(t1.opened() && t2.opened());
 }
