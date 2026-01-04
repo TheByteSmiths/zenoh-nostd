@@ -40,22 +40,22 @@ fn open_listen(stream: &mut std::net::TcpStream) -> Transport<[u8; BATCH_SIZE]> 
 fn open_connect(stream: &mut std::net::TcpStream) -> Transport<[u8; BATCH_SIZE]> {
     let mut transport = Transport::new([0u8; BATCH_SIZE]).streamed().connect();
 
-    for i in 0..3 {
+    if let Some(bytes) = transport.init() {
+        stream.write_all(bytes).ok();
+    }
+
+    for _ in 0..2 {
         let mut scope = transport.scope();
 
-        if i == 0 {
-            for _ in scope.rx.flush(&mut scope.state) {}
-        } else {
-            if scope
-                .rx
-                .feed_with(|data| stream.read_exact(data).map_or(0, |_| data.len()))
-                .is_err()
-            {
-                continue;
-            }
-
-            for _ in scope.rx.flush(&mut scope.state) {}
+        if scope
+            .rx
+            .feed_with(|data| stream.read_exact(data).map_or(0, |_| data.len()))
+            .is_err()
+        {
+            continue;
         }
+
+        for _ in scope.rx.flush(&mut scope.state) {}
 
         if let Some(bytes) = scope.tx.interact(&mut scope.state) {
             stream.write_all(bytes).ok();

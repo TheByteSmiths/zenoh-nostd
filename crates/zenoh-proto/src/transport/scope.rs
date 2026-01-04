@@ -1,5 +1,5 @@
 use crate::{
-    Transport, TransportError, ZEncode, ZReadable,
+    Transport, TransportError, ZReadable,
     msgs::NetworkMessage,
     msgs::*,
     transport::{
@@ -22,7 +22,7 @@ impl<'a> TransportStateScoped<'a> {
 
     pub(crate) fn process(
         &mut self,
-        request: Option<StateRequest<'a>>,
+        request: StateRequest<'a>,
     ) -> core::result::Result<(), TransportError> {
         let response = self.state.process(request)?;
         self.pending = response;
@@ -64,43 +64,7 @@ impl<Buff> TransportTxScoped<'_, Buff> {
     where
         Buff: AsMut<[u8]>,
     {
-        if let Some(pending) = state.pending.take() {
-            let batch_size = core::cmp::min(self.tx.batch_size as usize, self.tx.tx.as_mut().len());
-            let batch = &mut self.tx.tx.as_mut()[..batch_size];
-
-            if self.tx.streamed && batch_size < 2 {
-                return None;
-            }
-
-            let mut writer = &mut batch[if self.tx.streamed { 2 } else { 0 }..];
-            let start = writer.len();
-
-            let length = if pending.0.z_encode(&mut writer).is_ok() {
-                start - writer.len()
-            } else {
-                crate::error!("Couldn't encode msg {:?}", pending.0);
-                return None;
-            };
-
-            if length == 0 {
-                return None;
-            }
-
-            if self.tx.streamed {
-                let l = (length as u16).to_le_bytes();
-                batch[..2].copy_from_slice(&l);
-            }
-
-            let (ret, _) = self
-                .tx
-                .tx
-                .as_mut()
-                .split_at(length + if self.tx.streamed { 2 } else { 0 });
-
-            Some(&ret[..])
-        } else {
-            None
-        }
+        self.tx.answer(&mut state.pending)
     }
 }
 
@@ -173,7 +137,7 @@ impl<Buff> TransportRxScoped<'_, Buff> {
                 KeepAlive::ID => Some(TransportMessage::KeepAlive(decode!(KeepAlive))),
                 _ => None,
             } {
-                if let Err(e) = state.process(Some(StateRequest(msg))) {
+                if let Err(e) = state.process(StateRequest(msg)) {
                     crate::error!("Error while processing a TransportMessage. {:?}", e);
                 }
 
@@ -242,12 +206,6 @@ impl<Buff> TransportRxScoped<'_, Buff> {
         let rx = self.rx.rx.as_ref();
         let mut reader = &rx[..self.rx.cursor];
         let frame = &mut self.rx.frame;
-
-        if reader.is_empty() {
-            if let Err(e) = state.process(None) {
-                crate::error!("Error in the Transport State Machine: {}", e);
-            }
-        }
 
         core::iter::from_fn(move || Self::read_one(&mut reader, state, frame))
     }

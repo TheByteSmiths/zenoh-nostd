@@ -71,31 +71,11 @@ impl<Buff> Transport<Buff> {
     pub fn opened(&self) -> bool {
         self.state.opened()
     }
-}
 
-#[cfg(test)]
-pub fn const_array_dumb_handshake<const N: usize>(
-    t1: &mut Transport<[u8; N]>,
-    t2: &mut Transport<[u8; N]>,
-) {
-    fn step<const N: usize>(transport: &mut Transport<[u8; N]>, socket: (&mut [u8], &mut usize)) {
-        let mut scope = transport.scope();
-
-        scope.rx.feed(&socket.0[..*socket.1]).ok();
-        for _ in scope.rx.flush(&mut scope.state) {}
-
-        if let Some(i) = scope.tx.interact(&mut scope.state) {
-            socket.0[..i.len()].copy_from_slice(i);
-            *socket.1 = i.len();
-        }
-    }
-
-    let mut socket = [0u8; N];
-    let mut length = 0;
-
-    // We may only need 2.5 but we do it 3 times anyway
-    for _ in 0..3 {
-        step(t1, (&mut socket, &mut length));
-        step(t2, (&mut socket, &mut length));
+    pub fn init(&mut self) -> Option<&[u8]>
+    where
+        Buff: AsMut<[u8]>,
+    {
+        self.tx.answer(&mut self.state.init().ok())
     }
 }

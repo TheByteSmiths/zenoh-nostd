@@ -112,16 +112,48 @@ fn transport_codec_streamed() {
     assert!(messages.is_empty());
 }
 
+fn dumb_handshake<const N: usize>(t1: &mut Transport<[u8; N]>, t2: &mut Transport<[u8; N]>) {
+    fn step<const N: usize>(transport: &mut Transport<[u8; N]>, socket: (&mut [u8], &mut usize)) {
+        let mut scope = transport.scope();
+
+        scope.rx.feed(&socket.0[..*socket.1]).ok();
+        for _ in scope.rx.flush(&mut scope.state) {}
+
+        if let Some(bytes) = scope.tx.interact(&mut scope.state) {
+            socket.0[..bytes.len()].copy_from_slice(bytes);
+            *socket.1 = bytes.len();
+        }
+    }
+
+    let mut socket = [0u8; N];
+    let mut length = 0;
+
+    // Init one of them
+    if let Some(bytes) = t1.init() {
+        socket[..bytes.len()].copy_from_slice(bytes);
+        length = bytes.len();
+    } else if let Some(bytes) = t2.init() {
+        socket[..bytes.len()].copy_from_slice(bytes);
+        length = bytes.len();
+    }
+
+    // We may only need 2.5 but we do it 3 times anyway
+    for _ in 0..3 {
+        step(t1, (&mut socket, &mut length));
+        step(t2, (&mut socket, &mut length));
+    }
+}
+
 #[test]
 fn transport_handshake_non_streamed() {
     let mut t1 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).connect();
     let mut t2 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).listen();
-    const_array_dumb_handshake(&mut t1, &mut t2);
+    dumb_handshake(&mut t1, &mut t2);
     assert!(t1.opened() && t2.opened());
 
     let mut t1 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).listen();
     let mut t2 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER]).connect();
-    const_array_dumb_handshake(&mut t1, &mut t2);
+    dumb_handshake(&mut t1, &mut t2);
     assert!(t1.opened() && t2.opened());
 }
 
@@ -133,7 +165,7 @@ fn transport_handshake_streamed() {
     let mut t2 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER])
         .listen()
         .streamed();
-    const_array_dumb_handshake(&mut t1, &mut t2);
+    dumb_handshake(&mut t1, &mut t2);
     assert!(t1.opened() && t2.opened());
 
     let mut t1 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER])
@@ -142,6 +174,6 @@ fn transport_handshake_streamed() {
     let mut t2 = Transport::new([0u8; MAX_PAYLOAD_SIZE * NUM_ITER])
         .connect()
         .streamed();
-    const_array_dumb_handshake(&mut t1, &mut t2);
+    dumb_handshake(&mut t1, &mut t2);
     assert!(t1.opened() && t2.opened());
 }

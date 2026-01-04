@@ -156,7 +156,7 @@ impl<Buff> TransportRx<Buff> {
                 KeepAlive::ID => Some(TransportMessage::KeepAlive(decode!(KeepAlive))),
                 _ => None,
             } {
-                if let Err(e) = state.process(Some(StateRequest(msg))) {
+                if let Err(e) = state.process(StateRequest(msg)) {
                     crate::error!("Error while processing a TransportMessage. {:?}", e);
                 }
 
@@ -225,12 +225,6 @@ impl<Buff> TransportRx<Buff> {
         let rx = self.rx.as_ref();
         let mut reader = &rx[..self.cursor];
         let frame = &mut self.frame;
-
-        if reader.is_empty() {
-            if let Err(e) = state.process(None) {
-                crate::error!("Error in the Transport State Machine: {}", e);
-            }
-        }
 
         core::iter::from_fn(move || Self::read_one(&mut reader, state, frame))
     }

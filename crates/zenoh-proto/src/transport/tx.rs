@@ -1,6 +1,9 @@
 use crate::{
-    TransportError, exts::QoS, fields::Reliability, msgs::NetworkMessage,
-    transport::state::TransportState,
+    TransportError, ZEncode,
+    exts::QoS,
+    fields::Reliability,
+    msgs::NetworkMessage,
+    transport::state::{StateResponse, TransportState},
 };
 
 #[derive(Debug)]
@@ -122,6 +125,51 @@ impl<Buff> TransportTx<Buff> {
         Buff: AsMut<[u8]>,
     {
         Self::flush_internal(self.streamed, &mut self.cursor, self.tx.as_mut())
+    }
+
+    pub(crate) fn answer<'a, 'b>(
+        &'a mut self,
+        pending: &mut Option<StateResponse<'b>>,
+    ) -> Option<&'a [u8]>
+    where
+        Buff: AsMut<[u8]>,
+    {
+        if let Some(pending) = pending.take() {
+            let batch_size = core::cmp::min(self.batch_size as usize, self.tx.as_mut().len());
+            let batch = &mut self.tx.as_mut()[..batch_size];
+
+            if self.streamed && batch_size < 2 {
+                return None;
+            }
+
+            let mut writer = &mut batch[if self.streamed { 2 } else { 0 }..];
+            let start = writer.len();
+
+            let length = if pending.0.z_encode(&mut writer).is_ok() {
+                start - writer.len()
+            } else {
+                crate::error!("Couldn't encode msg {:?}", pending.0);
+                return None;
+            };
+
+            if length == 0 {
+                return None;
+            }
+
+            if self.streamed {
+                let l = (length as u16).to_le_bytes();
+                batch[..2].copy_from_slice(&l);
+            }
+
+            let (ret, _) = self
+                .tx
+                .as_mut()
+                .split_at(length + if self.streamed { 2 } else { 0 });
+
+            Some(&ret[..])
+        } else {
+            None
+        }
     }
 
     pub fn batch<'a, 'b>(
